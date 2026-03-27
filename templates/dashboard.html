@@ -49,13 +49,22 @@
       <p class="meta">{{ current_user.name }} ({{ current_user.email }})</p>
       <a class="logout" href="/logout">Log out</a>
       <hr />
-      <iframe id="roy-widget-frame" src="{{ iframe_url }}" allow="microphone"></iframe>
+      <iframe id="roy-widget-frame" src="https://eckard.opexa-llc.com/widget/widget-iframe" data-partner-id="27f0a3952722"></iframe>
     </div>
 
     <script>
       const ALLOWED_WIDGET_ORIGINS = {{ allowed_widget_origins | tojson }};
       const COOKIE_NAME = {{ jwe_cookie_name | tojson }};
       const iframe = document.getElementById("roy-widget-frame");
+
+      if (iframe) {
+        const iframeUrl = new URL(iframe.src, window.location.origin);
+        iframeUrl.searchParams.set("partner_id", iframe.dataset.partnerId || "");
+        iframeUrl.searchParams.set("parent_origin", window.location.origin);
+        iframeUrl.searchParams.set("auth_approach", "jwe_cookie");
+        iframeUrl.searchParams.set("widget_jwt_cookie_name", COOKIE_NAME);
+        iframe.src = iframeUrl.toString();
+      }
 
       function normalizeOrigin(origin) {
         try {

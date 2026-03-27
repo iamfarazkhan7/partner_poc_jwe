@@ -5,8 +5,6 @@ import json
 import os
 import time
 from pathlib import Path
-from urllib.parse import urlencode
-
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -166,24 +164,10 @@ def dashboard(request: Request):
     if not current_user:
         return RedirectResponse(url="/login", status_code=302)
 
-    parent_origin = str(request.base_url).rstrip("/")
-    widget_base = _env("WIDGET_IFRAME_URL", "http://localhost:3000/roy/widget-iframe")
-    partner_id = _env("PARTNER_ID", "partner-poc-jwe")
-    query = urlencode(
-        {
-            "partner_id": partner_id,
-            "parent_origin": parent_origin,
-            "auth_approach": "jwe_cookie",
-            "widget_jwt_cookie_name": _env("JWE_COOKIE_NAME", "roy_widget_jwe"),
-        }
-    )
-    iframe_url = f"{widget_base}?{query}"
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={
-            "iframe_url": iframe_url,
-            "partner_id": partner_id,
             "jwe_cookie_name": _env("JWE_COOKIE_NAME", "roy_widget_jwe"),
             "allowed_widget_origins": _allowed_widget_origins(),
             "current_user": current_user,
