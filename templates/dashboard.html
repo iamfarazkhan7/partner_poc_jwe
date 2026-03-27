@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Partner POC JWE</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        background: #f3f4f6;
+        color: #111827;
+      }
+      .container {
+        padding: 12px 8px;
+      }
+      h2 {
+        margin: 0 0 8px;
+        font-size: 24px;
+      }
+      .meta {
+        margin: 0 0 12px;
+        color: #4b5563;
+        font-size: 14px;
+      }
+      .logout {
+        font-size: 14px;
+      }
+      hr {
+        margin: 10px 0 0;
+        border: none;
+        border-top: 1px solid #d1d5db;
+      }
+      #roy-widget-frame {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        width: 90px;
+        height: 90px;
+        border: 0;
+        background: transparent;
+        z-index: 999999;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Partner POC - Dashboard</h2>
+      <p class="meta">{{ current_user.name }} ({{ current_user.email }})</p>
+      <a class="logout" href="/logout">Log out</a>
+      <hr />
+      <iframe id="roy-widget-frame" src="{{ iframe_url }}" allow="microphone"></iframe>
+    </div>
+
+    <script>
+      const ALLOWED_WIDGET_ORIGINS = {{ allowed_widget_origins | tojson }};
+      const COOKIE_NAME = {{ jwe_cookie_name | tojson }};
+      const iframe = document.getElementById("roy-widget-frame");
+
+      function normalizeOrigin(origin) {
+        try {
+          const u = new URL(origin);
+          return `${u.protocol}//${u.host}`;
+        } catch (e) {
+          return origin || "";
+        }
+      }
+
+      function isAllowedOrigin(origin) {
+        const normalized = normalizeOrigin(origin);
+        if (!normalized) return false;
+        if (ALLOWED_WIDGET_ORIGINS.includes("*")) return true;
+        const allowSet = new Set(ALLOWED_WIDGET_ORIGINS.map(normalizeOrigin));
+        return allowSet.has(normalized);
+      }
+
+      function readCookie(name) {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const match = document.cookie.match(new RegExp("(^| )" + escaped + "=([^;]+)"));
+        return match ? decodeURIComponent(match[2]) : null;
+      }
+
+      window.addEventListener("message", (event) => {
+        const data = event.data || {};
+        if (!isAllowedOrigin(event.origin)) {
+          if (data && data.type === "ROY_WIDGET_JWE_REQUEST") {
+            console.warn("[partner-poc] blocked JWE request due to origin", event.origin, ALLOWED_WIDGET_ORIGINS);
+          }
+          return;
+        }
+
+        if (data.type === "ROY_WIDGET_IFRAME_LAYOUT" && iframe) {
+          const state = data.state || data.layout?.state || "";
+          if (state === "open") {
+            iframe.style.top = "0";
+            iframe.style.left = "0";
+            iframe.style.right = "0";
+            iframe.style.bottom = "0";
+            iframe.style.width = "100vw";
+            iframe.style.height = "100vh";
+            iframe.style.zIndex = String(data.zIndex ?? 999999);
+          } else {
+            iframe.style.top = "auto";
+            iframe.style.left = "auto";
+            iframe.style.right = `${data.right ?? 24}px`;
+            iframe.style.bottom = `${data.bottom ?? 24}px`;
+            iframe.style.width = `${data.width ?? 90}px`;
+            iframe.style.height = `${data.height ?? 90}px`;
+            iframe.style.zIndex = String(data.zIndex ?? 999999);
+          }
+          return;
+        }
+
+        if (data.type === "ROY_WIDGET_JWE_REQUEST") {
+          const token =
+            readCookie(data.cookie_name || "") ||
+            readCookie(COOKIE_NAME);
+          console.log("[partner-poc] JWE request", {
+            requestId: data.request_id,
+            cookieNameFromWidget: data.cookie_name,
+            tokenPresent: Boolean(token),
+          });
+          event.source.postMessage(
+            {
+              type: "ROY_WIDGET_JWE_RESPONSE",
+              request_id: data.request_id,
+              jwe: token || null,
+            },
+            event.origin
+          );
+          return;
+        }
+      });
+    </script>
+  </body>
+</html>
