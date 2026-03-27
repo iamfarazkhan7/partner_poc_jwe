@@ -87,16 +87,25 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("utf-8")
 
 
+def _load_aesgcm_key() -> bytes:
+    key = _env("PARTNER_JWE_KEY", "0123456789abcdef0123456789abcdef").encode("utf-8")
+    if len(key) not in {16, 24, 32}:
+        raise ValueError(
+            f"PARTNER_JWE_KEY must be 16, 24, or 32 bytes for AESGCM; got {len(key)} bytes."
+        )
+    return key
+
+
 def _create_jwe() -> str:
-    jwe_key = _env("PARTNER_JWE_KEY", "0123456789abcdef0123456789abcdef").encode("utf-8")
+    jwe_key = _load_aesgcm_key()
     jwt_secret = _env("PARTNER_JWT_SECRET", "0123456789abcdef0123456789abcd").encode("utf-8")
     now = int(time.time())
     payload = {
-        "user_id": _env("PARTNER_JWT_USER_ID", "faraz7"),
-        "email": _env("PARTNER_JWT_EMAIL", "faraz@devboxtech.co.uk"),
+        "user_id": _env("PARTNER_JWT_USER_ID", "partner-user"),
+        "email": _env("PARTNER_JWT_EMAIL", "partner-user@devboxtech.co.uk"),
         "roles": [
             role.strip()
-            for role in _env("PARTNER_JWT_ROLES", "partner,staff").split(",")
+            for role in _env("PARTNER_JWT_ROLES", "partner").split(",")
             if role.strip()
         ],
         "exp": now + 3600,
