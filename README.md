@@ -21,8 +21,8 @@ Update `.env`:
 
 - `WIDGET_IFRAME_URL` (your widget iframe URL)
 - `PARTNER_ID` (must exist in Roy backend partner config)
-- `PARTNER_JWE_KEY` (must match backend `jwe_decryption_key` for this partner)
-- `PARTNER_JWT_SECRET` (defaults to `0123456789abcdef0123456789abcd`)
+- `PARTNER_JWE` (must match backend `jwe_decryption_key` for this partner)
+- `PARTNER_JWS` (defaults to `0123456789abcdef0123456789abcd`)
 - `PARTNER_JWT_USER_ID` (defaults to `faraz7`)
 - `PARTNER_JWT_EMAIL` (defaults to `faraz@devboxtech.co.uk`)
 - `PARTNER_JWT_ROLES` (defaults to `partner,staff`)

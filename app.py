@@ -85,18 +85,68 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("utf-8")
 
 
-def _load_aesgcm_key() -> bytes:
-    key = _env("PARTNER_JWE_KEY", "0123456789abcdef0123456789abcdef").encode("utf-8")
-    if len(key) not in {16, 24, 32}:
+def _load_literal_env_secret(env_key: str, default: str) -> bytes:
+    return _env(env_key, default).encode("utf-8")
+
+
+def _load_jwe_key() -> bytes:
+    enc = _env("PARTNER_JWE_ENC", "A256GCM")
+    expected_lengths = {
+        "A128GCM": 16,
+        "A192GCM": 24,
+        "A256GCM": 32,
+    }
+    expected_length = expected_lengths.get(enc)
+    if expected_length is None:
         raise ValueError(
-            f"PARTNER_JWE_KEY must be 16, 24, or 32 bytes for AESGCM; got {len(key)} bytes."
+            f"Unsupported PARTNER_JWE_ENC value {enc!r}. Expected one of: A128GCM, A192GCM, A256GCM."
+        )
+
+    key = _load_literal_env_secret(
+        "PARTNER_JWE",
+        "0123456789abcdef0123456789abcdef",
+    )
+    if len(key) != expected_length:
+        raise ValueError(
+            f"PARTNER_JWE is {len(key)} bytes, but PARTNER_JWE_ENC={enc} requires {expected_length} bytes."
         )
     return key
 
 
+def _load_jws_key() -> tuple[str, bytes, object]:
+    alg = _env("PARTNER_JWS_ALG", "HS256")
+    minimum_lengths = {
+        "HS256": 32,
+        "HS384": 48,
+        "HS512": 64,
+    }
+    digest_map = {
+        "HS256": hashlib.sha256,
+        "HS384": hashlib.sha384,
+        "HS512": hashlib.sha512,
+    }
+    minimum_length = minimum_lengths.get(alg)
+    digest = digest_map.get(alg)
+    if minimum_length is None or digest is None:
+        raise ValueError(
+            f"Unsupported PARTNER_JWS_ALG value {alg!r}. Expected one of: HS256, HS384, HS512."
+        )
+
+    secret = _load_literal_env_secret(
+        "PARTNER_JWS",
+        "0123456789abcdef0123456789abcd",
+    )
+    if len(secret) < minimum_length:
+        raise ValueError(
+            f"PARTNER_JWS is {len(secret)} bytes, but PARTNER_JWS_ALG={alg} requires at least {minimum_length} bytes."
+        )
+    return alg, secret, digest
+
+
 def _create_jwe() -> str:
-    jwe_key = _load_aesgcm_key()
-    jwt_secret = _env("PARTNER_JWT_SECRET", "0123456789abcdef0123456789abcd").encode("utf-8")
+    jwe_key = _load_jwe_key()
+    jwe_enc = _env("PARTNER_JWE_ENC", "A256GCM")
+    jws_alg, jwt_secret, digest = _load_jws_key()
     now = int(time.time())
     payload = {
         "user_id": _env("PARTNER_JWT_USER_ID", "partner-user"),
@@ -109,18 +159,18 @@ def _create_jwe() -> str:
         "exp": now + 3600,
     }
 
-    jwt_header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode("utf-8"))
+    jwt_header = _b64url(json.dumps({"alg": jws_alg, "typ": "JWT"}, separators=(",", ":")).encode("utf-8"))
     jwt_payload = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     jwt_signing_input = f"{jwt_header}.{jwt_payload}"
     jwt_signature = hmac.new(
         jwt_secret,
         jwt_signing_input.encode("utf-8"),
-        hashlib.sha256,
+        digest,
     ).digest()
     inner_jwt = f"{jwt_signing_input}.{_b64url(jwt_signature)}"
 
     protected_b64 = _b64url(
-        json.dumps({"alg": "dir", "enc": "A256GCM", "cty": "JWT"}, separators=(",", ":")).encode("utf-8")
+        json.dumps({"alg": "dir", "enc": jwe_enc, "cty": "JWT"}, separators=(",", ":")).encode("utf-8")
     )
     iv = os.urandom(12)
     ciphertext_and_tag = AESGCM(jwe_key).encrypt(
