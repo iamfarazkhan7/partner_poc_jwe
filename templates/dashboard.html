@@ -96,7 +96,7 @@
         <h2>Partner POC - Dashboard</h2>
         <p class="meta">{{ current_user.name }} ({{ current_user.email }})</p>
         <a class="logout" href="/logout">Log out</a>
-        <div class="grid">
+        <!-- <div class="grid">
           <div class="stat">
             <span class="label">Partner ID</span>
             <span class="value">{{ partner_id }}</span>
@@ -113,12 +113,12 @@
             <span class="label">Cookie Name</span>
             <span class="value">{{ jwe_cookie_name }}</span>
           </div>
-        </div>
-        <p class="hint">
+        </div> -->
+        <!-- <p class="hint">
           The widget still initializes session with <code>partner_id</code>, then posts the compact token to
           <code>/widget/jwe-auth</code> as <code>{ "session_id", "token", "parent_hostname" }</code>.
-        </p>
-        <div class="debug">
+        </p> -->
+        <!-- <div class="debug">
           <h3>Token Debug</h3>
           <div class="grid">
             <div class="stat">
@@ -143,7 +143,7 @@
             <code>Plaintext Kind: json</code>. If it shows <code>compact_jws</code>, the backend will reject it as nested.
           </p>
           <pre>{{ token_debug | tojson(indent=2) }}</pre>
-        </div>
+        </div> -->
       </div>
 <iframe
   id="roy-widget-frame"
