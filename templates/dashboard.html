@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Partner POC JWE</title>
+    <title>Partner POC Token Auth</title>
     <style>
       body {
         font-family: Arial, sans-serif;
@@ -12,7 +12,7 @@
         color: #111827;
       }
       .container {
-        padding: 12px 8px;
+        padding: 16px 12px;
       }
       h2 {
         margin: 0 0 8px;
@@ -26,6 +26,63 @@
       .logout {
         font-size: 14px;
       }
+      .card {
+        max-width: 720px;
+        background: #fff;
+        border: 1px solid #d1d5db;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 8px 24px rgba(17, 24, 39, 0.06);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 12px;
+        margin: 14px 0 10px;
+      }
+      .stat {
+        padding: 10px 12px;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        background: #f9fafb;
+      }
+      .label {
+        display: block;
+        margin-bottom: 4px;
+        color: #6b7280;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .value {
+        font-size: 14px;
+        word-break: break-word;
+      }
+      .hint {
+        margin: 8px 0 0;
+        color: #4b5563;
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      .debug {
+        margin-top: 14px;
+        border-top: 1px solid #e5e7eb;
+        padding-top: 14px;
+      }
+      .debug h3 {
+        margin: 0 0 10px;
+        font-size: 16px;
+      }
+      pre {
+        margin: 0;
+        padding: 12px;
+        background: #111827;
+        color: #f9fafb;
+        border-radius: 10px;
+        overflow: auto;
+        font-size: 12px;
+        line-height: 1.5;
+      }
       hr {
         margin: 10px 0 0;
         border: none;
@@ -35,14 +92,63 @@
   </head>
   <body>
     <div class="container">
-      <h2>Partner POC - Dashboard</h2>
-      <p class="meta">{{ current_user.name }} ({{ current_user.email }})</p>
-      <a class="logout" href="/logout">Log out</a>
-      <hr />
+      <div class="card">
+        <h2>Partner POC - Dashboard</h2>
+        <p class="meta">{{ current_user.name }} ({{ current_user.email }})</p>
+        <a class="logout" href="/logout">Log out</a>
+        <div class="grid">
+          <div class="stat">
+            <span class="label">Partner ID</span>
+            <span class="value">{{ partner_id }}</span>
+          </div>
+          <div class="stat">
+            <span class="label">Partner Auth Mode</span>
+            <span class="value">{{ partner_auth_mode }}</span>
+          </div>
+          <div class="stat">
+            <span class="label">Demo Token Flow</span>
+            <span class="value">{{ token_flow }}</span>
+          </div>
+          <div class="stat">
+            <span class="label">Cookie Name</span>
+            <span class="value">{{ jwe_cookie_name }}</span>
+          </div>
+        </div>
+        <p class="hint">
+          The widget still initializes session with <code>partner_id</code>, then posts the compact token to
+          <code>/widget/jwe-auth</code> as <code>{ "session_id", "token", "parent_hostname" }</code>.
+        </p>
+        <div class="debug">
+          <h3>Token Debug</h3>
+          <div class="grid">
+            <div class="stat">
+              <span class="label">Cookie Present</span>
+              <span class="value">{{ token_debug.present }}</span>
+            </div>
+            <div class="stat">
+              <span class="label">Part Count</span>
+              <span class="value">{{ token_debug.part_count }}</span>
+            </div>
+            <div class="stat">
+              <span class="label">Token Kind</span>
+              <span class="value">{{ token_debug.kind }}</span>
+            </div>
+            <div class="stat">
+              <span class="label">Plaintext Kind</span>
+              <span class="value">{{ token_debug.plaintext_kind or "n/a" }}</span>
+            </div>
+          </div>
+          <p class="hint">
+            For <code>PARTNER_AUTH_MODE=jwe</code>, this should show <code>Token Kind: jwe</code> and
+            <code>Plaintext Kind: json</code>. If it shows <code>compact_jws</code>, the backend will reject it as nested.
+          </p>
+          <pre>{{ token_debug | tojson(indent=2) }}</pre>
+        </div>
+      </div>
 <iframe
   id="roy-widget-frame"
-  src="https://eckard.opexa-llc.com/roy/widget-iframe"
-  data-partner-id="bcc4b6792450"
+  src="{{ widget_iframe_url }}"
+  data-partner-id="{{ partner_id }}"
   style="position: fixed; right: 24px; bottom: 24px; width: 90px; height: 90px; border: 0; background: transparent; z-index: 999999;"
 ></iframe>
 <script>
@@ -84,10 +190,13 @@
 
   window.addEventListener("message", (event) => {
     const data = event.data || {};
+    const isTokenRequest =
+      data &&
+      (data.type === "ROY_WIDGET_JWE_REQUEST" || data.type === "ROY_WIDGET_TOKEN_REQUEST");
 
     if (!isAllowedOrigin(event.origin)) {
-      if (data && data.type === "ROY_WIDGET_JWE_REQUEST") {
-        console.warn("[partner-poc] blocked JWE request due to origin", event.origin, ALLOWED_WIDGET_ORIGINS);
+      if (isTokenRequest) {
+        console.warn("[partner-poc] blocked token request due to origin", event.origin, ALLOWED_WIDGET_ORIGINS);
       }
       return;
     }
@@ -116,29 +225,41 @@
       return;
     }
 
-    if (data.type === "ROY_WIDGET_JWE_REQUEST") {
+    if (isTokenRequest) {
       const token =
         readCookie(data.cookie_name || "") ||
         readCookie(COOKIE_NAME);
 
-      console.log("[partner-poc] JWE request", {
+      console.log("[partner-poc] token request", {
         requestId: data.request_id,
         cookieNameFromWidget: data.cookie_name,
         tokenPresent: Boolean(token),
       });
 
-      event.source.postMessage(
-        {
-          type: "ROY_WIDGET_JWE_RESPONSE",
-          request_id: data.request_id,
-          jwe: token || null,
-        },
-        event.origin
-      );
+      if (data.type === "ROY_WIDGET_TOKEN_REQUEST") {
+        event.source.postMessage(
+          {
+            type: "ROY_WIDGET_TOKEN_RESPONSE",
+            request_id: data.request_id,
+            token: token || null,
+          },
+          event.origin
+        );
+      } else {
+        event.source.postMessage(
+          {
+            type: "ROY_WIDGET_JWE_RESPONSE",
+            request_id: data.request_id,
+            jwe: token || null,
+          },
+          event.origin
+        );
+      }
 
       return;
     }
   });
 </script>
+    </div>
   </body>
 </html>

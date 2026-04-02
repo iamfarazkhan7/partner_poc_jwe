@@ -3,8 +3,10 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from pathlib import Path
+from typing import Optional
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -16,7 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env", override=False)
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-app = FastAPI(title="Partner POC JWE")
+app = FastAPI(title="Partner POC Token Auth")
 
 SESSION_COOKIE_NAME = "partner_poc_session"
 
@@ -56,6 +58,39 @@ def _allowed_widget_origins() -> list[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+def _widget_iframe_url() -> str:
+    return _env("WIDGET_IFRAME_URL", "http://localhost:3000/roy/widget-iframe")
+
+
+def _partner_id() -> str:
+    return _env("PARTNER_ID", "050353eae9b6")
+
+
+def _partner_auth_mode() -> str:
+    mode = _env("PARTNER_AUTH_MODE", "nested").lower()
+    supported = {"jws", "jwe", "nested", "auto"}
+    if mode not in supported:
+        raise ValueError(
+            f"Unsupported PARTNER_AUTH_MODE value {mode!r}. Expected one of: auto, jwe, jws, nested."
+        )
+    return mode
+
+
+def _demo_token_flow() -> str:
+    configured_flow = _env("PARTNER_TOKEN_FLOW", "").lower()
+    auth_mode = _partner_auth_mode()
+    if auth_mode != "auto":
+        return auth_mode
+    if configured_flow:
+        supported = {"jws", "jwe", "nested"}
+        if configured_flow not in supported:
+            raise ValueError(
+                f"Unsupported PARTNER_TOKEN_FLOW value {configured_flow!r}. Expected one of: jwe, jws, nested."
+            )
+        return configured_flow
+    return "nested"
+
+
 def _get_current_user(request: Request):
     username = (request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
     if not username:
@@ -83,6 +118,14 @@ def _find_user_by_login(login_value: str):
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("utf-8")
+
+
+def _b64url_decode(data: str) -> bytes:
+    padding = "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+
+_COMPACT_JWS_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
 
 
 def _load_literal_env_secret(env_key: str, default: str) -> bytes:
@@ -143,12 +186,9 @@ def _load_jws_key() -> tuple[str, bytes, object]:
     return alg, secret, digest
 
 
-def _create_jwe() -> str:
-    jwe_key = _load_jwe_key()
-    jwe_enc = _env("PARTNER_JWE_ENC", "A256GCM")
-    jws_alg, jwt_secret, digest = _load_jws_key()
+def _create_claims() -> dict:
     now = int(time.time())
-    payload = {
+    return {
         "user_id": _env("PARTNER_JWT_USER_ID", "partner-user"),
         "email": _env("PARTNER_JWT_EMAIL", "partner-user@devboxtech.co.uk"),
         "roles": [
@@ -159,7 +199,12 @@ def _create_jwe() -> str:
         "exp": now + 3600,
     }
 
-    jwt_header = _b64url(json.dumps({"alg": jws_alg, "typ": "JWT"}, separators=(",", ":")).encode("utf-8"))
+
+def _create_jws(payload: dict) -> str:
+    jws_alg, jwt_secret, digest = _load_jws_key()
+    jwt_header = _b64url(
+        json.dumps({"alg": jws_alg, "typ": "JWT"}, separators=(",", ":")).encode("utf-8")
+    )
     jwt_payload = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     jwt_signing_input = f"{jwt_header}.{jwt_payload}"
     jwt_signature = hmac.new(
@@ -167,15 +212,19 @@ def _create_jwe() -> str:
         jwt_signing_input.encode("utf-8"),
         digest,
     ).digest()
-    inner_jwt = f"{jwt_signing_input}.{_b64url(jwt_signature)}"
+    return f"{jwt_signing_input}.{_b64url(jwt_signature)}"
 
-    protected_b64 = _b64url(
-        json.dumps({"alg": "dir", "enc": jwe_enc, "cty": "JWT"}, separators=(",", ":")).encode("utf-8")
-    )
+
+def _create_jwe(plaintext: bytes, content_type: Optional[str] = None) -> str:
+    jwe_key = _load_jwe_key()
+    protected_header = {"alg": "dir", "enc": _env("PARTNER_JWE_ENC", "A256GCM")}
+    if content_type:
+        protected_header["cty"] = content_type
+    protected_b64 = _b64url(json.dumps(protected_header, separators=(",", ":")).encode("utf-8"))
     iv = os.urandom(12)
     ciphertext_and_tag = AESGCM(jwe_key).encrypt(
         iv,
-        inner_jwt.encode("utf-8"),
+        plaintext,
         protected_b64.encode("utf-8"),
     )
     ciphertext = ciphertext_and_tag[:-16]
@@ -189,6 +238,69 @@ def _create_jwe() -> str:
             _b64url(tag),
         ]
     )
+
+
+def _create_token() -> str:
+    claims = _create_claims()
+    flow = _demo_token_flow()
+    if flow == "jws":
+        return _create_jws(claims)
+    if flow == "jwe":
+        return _create_jwe(json.dumps(claims, separators=(",", ":")).encode("utf-8"))
+    if flow == "nested":
+        return _create_jwe(_create_jws(claims).encode("utf-8"), content_type="JWT")
+    raise ValueError(f"Unsupported token flow {flow!r}.")
+
+
+def _inspect_token(token: str) -> dict:
+    token = (token or "").strip()
+    details = {
+        "present": bool(token),
+        "part_count": 0,
+        "kind": "missing",
+        "header": None,
+        "plaintext_kind": None,
+        "plaintext_preview": None,
+        "error": None,
+    }
+    if not token:
+        return details
+
+    parts = token.split(".")
+    details["part_count"] = len(parts)
+
+    try:
+        if len(parts) == 3:
+            details["kind"] = "jws"
+            details["header"] = json.loads(_b64url_decode(parts[0]).decode("utf-8"))
+            payload = _b64url_decode(parts[1]).decode("utf-8")
+            details["plaintext_kind"] = "json" if payload.lstrip().startswith("{") else "text"
+            details["plaintext_preview"] = payload[:160]
+            return details
+
+        if len(parts) == 5:
+            details["kind"] = "jwe"
+            details["header"] = json.loads(_b64url_decode(parts[0]).decode("utf-8"))
+            plaintext = AESGCM(_load_jwe_key()).decrypt(
+                _b64url_decode(parts[2]),
+                _b64url_decode(parts[3]) + _b64url_decode(parts[4]),
+                parts[0].encode("utf-8"),
+            ).decode("utf-8")
+            details["plaintext_preview"] = plaintext[:160]
+            if plaintext.lstrip().startswith("{"):
+                details["plaintext_kind"] = "json"
+            elif _COMPACT_JWS_RE.fullmatch(plaintext):
+                details["plaintext_kind"] = "compact_jws"
+            else:
+                details["plaintext_kind"] = "text"
+            return details
+
+        details["kind"] = "unknown"
+        details["error"] = f"Unexpected compact part count: {len(parts)}"
+        return details
+    except Exception as exc:
+        details["error"] = str(exc)
+        return details
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -213,14 +325,21 @@ def dashboard(request: Request):
     current_user = _get_current_user(request)
     if not current_user:
         return RedirectResponse(url="/login", status_code=302)
+    cookie_name = _env("JWE_COOKIE_NAME", "roy_widget_jwe")
+    current_token = request.cookies.get(cookie_name, "")
 
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={
-            "jwe_cookie_name": _env("JWE_COOKIE_NAME", "roy_widget_jwe"),
+            "jwe_cookie_name": cookie_name,
             "allowed_widget_origins": _allowed_widget_origins(),
             "current_user": current_user,
+            "widget_iframe_url": _widget_iframe_url(),
+            "partner_id": _partner_id(),
+            "partner_auth_mode": _partner_auth_mode(),
+            "token_flow": _demo_token_flow(),
+            "token_debug": _inspect_token(current_token),
         },
     )
 
@@ -236,7 +355,7 @@ def login(
             url="/login?error=Invalid%20username%20or%20password",
             status_code=302,
         )
-    token = _create_jwe()
+    token = _create_token()
     response = RedirectResponse(url="/dashboard", status_code=302)
     response.set_cookie(
         key=_env("JWE_COOKIE_NAME", "roy_widget_jwe"),

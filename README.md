@@ -1,14 +1,18 @@
-# Partner POC (JWE Cookie Mode)
+# Partner POC (Compact Token Cookie Mode)
 
-Small FastAPI app to test the widget's new `jwe_cookie` auth approach.
+Small FastAPI app to test the widget's compact token auth flow.
 
 ## What this POC does
 
 - Uses a login page with default test users (username/password).
-- On login, generates an HS256 JWT with the default sample claims and wraps it in a `dir` / `A256GCM` JWE.
-- Stores JWE in cookie (default: `roy_widget_jwe`).
+- On login, generates one compact token based on partner auth mode:
+  - `jws`: signed JWT only
+  - `jwe`: encrypted token with plain JSON claims
+  - `nested`: encrypted token whose plaintext is a signed JWT
+  - `auto`: allows all three on the backend; this demo uses `PARTNER_TOKEN_FLOW` to pick which one to emit
+- Stores the compact token in a cookie (default: `roy_widget_jwe`).
 - Shows dashboard with embedded widget iframe.
-- Listens for `ROY_WIDGET_JWE_REQUEST` and replies with `ROY_WIDGET_JWE_RESPONSE`.
+- Listens for widget token requests and replies with the cookie token.
 
 ## 1) Configure env
 
@@ -21,8 +25,12 @@ Update `.env`:
 
 - `WIDGET_IFRAME_URL` (your widget iframe URL)
 - `PARTNER_ID` (must exist in Roy backend partner config)
-- `PARTNER_JWE` (must match backend `jwe_decryption_key` for this partner)
-- `PARTNER_JWS` (defaults to `0123456789abcdef0123456789abcd`)
+- `PARTNER_AUTH_MODE` (`jws`, `jwe`, `nested`, `auto`)
+- `PARTNER_TOKEN_FLOW` (`jws`, `jwe`, `nested`) only used when `PARTNER_AUTH_MODE=auto`
+- `PARTNER_JWE` (must match backend `partnerJwtKey` for this partner)
+- `PARTNER_JWS` (must match backend `partnerJwtSecret` for this partner)
+- `PARTNER_JWS_ALG` (must match backend `signingSecretAlgorithm`)
+- `PARTNER_JWE_ENC` (must match backend `encryptionSecretMethod`)
 - `PARTNER_JWT_USER_ID` (defaults to `faraz7`)
 - `PARTNER_JWT_EMAIL` (defaults to `faraz@devboxtech.co.uk`)
 - `PARTNER_JWT_ROLES` (defaults to `partner,staff`)
@@ -47,7 +55,25 @@ Open: `http://127.0.0.1:9010/dashboard`
 
 ## 3) Widget setup
 
-Use widget loader with:
+The widget still initializes session with:
+
+```json
+{
+  "partner_id": "actual-partner-id"
+}
+```
+
+The widget then authenticates with:
+
+```json
+{
+  "session_id": "...",
+  "token": "...",
+  "parent_hostname": "example.com"
+}
+```
+
+Use the widget loader / iframe with:
 
 - `data-auth-approach="jwe_cookie"`
 - `data-partner-id="<same partner_id>"`
@@ -55,20 +81,24 @@ Use widget loader with:
 
 ## 4) Expected behavior
 
-- Open popup -> iframe sends `ROY_WIDGET_JWE_REQUEST`.
-- Parent returns JWE from cookie.
+- Open popup -> iframe asks the parent for the compact token.
+- Parent returns the token from cookie.
 - Widget calls `POST /widget/jwe-auth`.
 - Widget updates to authenticated role/user.
 - Every poll cycle while open, widget re-checks cookie presence via same message flow.
 
 Token defaults:
 
-- JWE key default: `0123456789abcdef0123456789abcdef`
-- JWT secret default: `0123456789abcdef0123456789abcd`
-- JWT default payload: `user_id=faraz7`, `email=faraz@devboxtech.co.uk`, `roles=["partner","staff"]`, `exp=now+3600`
+- JWE key default: `partnerJwtKey`
+- JWT secret default: `partnerJwtSecret`
+- Partner config fields used by backend: `partnerId`, `partnerHostname`, `partnerJwtSecret`, `partnerJwtKey`, `partnerAuthMode`, `signingSecretAlgorithm`, `encryptionSecretMethod`
+- JWT default payload: `user_id=partner-user`, `email=partner-user@devboxtech.co.uk`, `roles=["partner"]`, `exp=now+3600`
 - Expiry default: 1 hour
 
 ## Notes
 
+- Token handling is automatic by compact format on the backend:
+  - 3 parts = JWS
+  - 5 parts = JWE
 - This POC sets cookie as non-HttpOnly so browser JS can read it for relay.
 - Production systems should harden this pattern (strict origin checks, secure cookies, TLS).
