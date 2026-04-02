@@ -326,9 +326,8 @@ def dashboard(request: Request):
     if not current_user:
         return RedirectResponse(url="/login", status_code=302)
     cookie_name = _env("JWE_COOKIE_NAME", "roy_widget_jwe")
-    current_token = request.cookies.get(cookie_name, "")
-
-    return templates.TemplateResponse(
+    token = _create_token()
+    response = templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={
@@ -339,9 +338,17 @@ def dashboard(request: Request):
             "partner_id": _partner_id(),
             "partner_auth_mode": _partner_auth_mode(),
             "token_flow": _demo_token_flow(),
-            "token_debug": _inspect_token(current_token),
+            "token_debug": _inspect_token(token),
         },
     )
+    response.set_cookie(
+        key=cookie_name,
+        value=token,
+        max_age=60 * 60,
+        httponly=False,  # parent page JS needs to read and relay this for PoC
+        samesite="lax",
+    )
+    return response
 
 
 @app.post("/login")
